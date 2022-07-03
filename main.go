@@ -8,27 +8,21 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
-
-var (
-	opsProcessed = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "promexperiment_processed_ops_total",
-		Help: "The total number of processed events",
-	})
-)
-
-func recordMetrics() {
-	go func() {
-		for {
-			opsProcessed.Inc()
-			time.Sleep(2 * time.Second)
-		}
-	}()
-}
 
 func helloHandler(w http.ResponseWriter, req *http.Request) {
 	log.Print("Received request for hello world")
 	io.WriteString(w, "Hello World\n")
+}
+
+func metricsMiddlewareBuilder(reqCounter prometheus.Counter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+			reqCounter.Inc()
+		})
+	}
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
@@ -42,7 +36,14 @@ func loggingMiddleware(next http.Handler) http.Handler {
 }
 
 func applyMiddlewares(mux *http.ServeMux) {
-	mux.Handle("/hello", loggingMiddleware(http.HandlerFunc(helloHandler)))
+	requestsServed := promauto.NewCounter(prometheus.CounterOpts{
+		Name: "promexperiment_processed_requests_total",
+		Help: "The total number of processed requests",
+	})
+	metricsMiddleware := metricsMiddlewareBuilder(requestsServed)
+
+	mux.Handle("/hello", loggingMiddleware(metricsMiddleware(http.HandlerFunc(helloHandler))))
+	mux.Handle("/metrics", promhttp.Handler())
 }
 
 func main() {
